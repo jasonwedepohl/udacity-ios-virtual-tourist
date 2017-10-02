@@ -17,6 +17,7 @@ class MapViewController: UIViewController, MKMapViewDelegate {
 	let deletePrompt = "Tap pins to delete"
 	let deletePromptHeight: CGFloat = 40
 	let deletePromptFontSize: CGFloat = 21
+	let gallerySegueIdentifier = "GallerySegue"
 	
 	//MARK: Properties
 	
@@ -37,6 +38,27 @@ class MapViewController: UIViewController, MKMapViewDelegate {
 		view.addGestureRecognizer(longPressRecognizer)
 		
 		setNavBarButton(.edit, #selector(editAnnotations))
+	}
+	
+	override func prepare(for segue: UIStoryboardSegue, sender: Any?) {
+		if segue.identifier == gallerySegueIdentifier {
+			guard let galleryController = segue.destination as? GalleryViewController else {
+				print("Expected segue destination to be GalleryViewController but was \(String(describing: segue.destination))")
+				return
+			}
+			
+			guard let pin = sender as? Pin else {
+				print("Expected sender to be a Pin but was \(String(describing: sender))")
+				return
+			}
+			
+			galleryController.pin = pin
+			
+			//set back bar title on Gallery view to "Back", not "Virtual Tourist"
+			let backItem = UIBarButtonItem()
+			backItem.title = "Back"
+			navigationItem.backBarButtonItem = backItem
+		}
 	}
 	
 	@objc private func addAnnotation(sender: UILongPressGestureRecognizer) {
@@ -101,6 +123,7 @@ class MapViewController: UIViewController, MKMapViewDelegate {
 		if pinView == nil {
 			pinView = MKPinAnnotationView(annotation: annotation, reuseIdentifier: pinReuseID)
 			pinView!.pinTintColor = .red
+			pinView!.canShowCallout = false
 			pinView!.animatesDrop = true
 		}
 		else {
@@ -113,12 +136,14 @@ class MapViewController: UIViewController, MKMapViewDelegate {
 	func mapView(_ mapView: MKMapView, didSelect view: MKAnnotationView) {
 		guard let annotation = view.annotation else { return }
 		
+		let pinIndex = findPin(annotation.title!!)!
+		
 		if editingPins {
 			mapView.removeAnnotation(annotation)
-			let pinIndex = findPin(annotation.title!!)
-			pins.remove(at: pinIndex!)
+			pins.remove(at: pinIndex)
 		} else {
-			//TODO: navigate to photos for given pin
+			mapView.deselectAnnotation(annotation, animated: false)
+			performSegue(withIdentifier: gallerySegueIdentifier, sender: pins[pinIndex])
 		}
 	}
 	
