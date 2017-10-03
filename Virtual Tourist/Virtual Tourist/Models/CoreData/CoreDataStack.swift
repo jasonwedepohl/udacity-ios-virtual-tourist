@@ -6,6 +6,9 @@
 //  Copyright © 2017 Jason Wedepohl. All rights reserved.
 //
 
+//ATTRIBUTION: This file is a modified version of the CoreDataStack class from Udacity's iOS Persistence course, lesson "Core Data and Concurrency".
+//That file is hosted here: https://github.com/udacity/ios-nd-persistence/blob/master/CoolNotes/13-CoreDataAndConcurrency/CoolNotes/CoreDataStack.swift
+
 import CoreData
 
 // MARK: - CoreDataStack
