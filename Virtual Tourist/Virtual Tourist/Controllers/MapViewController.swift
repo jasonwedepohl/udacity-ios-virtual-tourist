@@ -20,6 +20,13 @@ class MapViewController: UIViewController {
 	let deletePromptFontSize: CGFloat = 21
 	let gallerySegueIdentifier = "GallerySegue"
 	
+	//keys for UserDefaults
+	let valuesExistKey = "ValuesExist"
+	let altitudeKey = "Altitude"
+	let headingKey = "Heading"
+	let centerLatitudeKey = "CenterLatitude"
+	let centerLongitudeKey = "CenterLongitude"
+	
 	//MARK: Properties
 	
 	var deletePromptView: UITextView!
@@ -41,6 +48,16 @@ class MapViewController: UIViewController {
 		
 		//load all pins from main context
 		mapView.addAnnotations(Pin.fetchAll())
+		
+		//set map camera if values are there
+		if UserDefaults.standard.bool(forKey: valuesExistKey) {
+			let altitude = UserDefaults.standard.double(forKey: altitudeKey)
+			let heading = UserDefaults.standard.double(forKey: headingKey)
+			let coordinate = CLLocationCoordinate2D(latitude: UserDefaults.standard.double(forKey: centerLatitudeKey),
+			                                        longitude: UserDefaults.standard.double(forKey: centerLongitudeKey))
+			let camera = MKMapCamera(lookingAtCenter: coordinate, fromDistance: altitude, pitch: 0, heading: heading)
+			mapView.setCamera(camera, animated: false)
+		}
 	}
 	
 	override func prepare(for segue: UIStoryboardSegue, sender: Any?) {
@@ -152,6 +169,16 @@ extension MapViewController: MKMapViewDelegate {
 			mapView.deselectAnnotation(annotation, animated: false)
 			performSegue(withIdentifier: gallerySegueIdentifier, sender: annotation as! Pin)
 		}
+	}
+	
+	//remember map view camera
+	func mapView(_ mapView: MKMapView, regionDidChangeAnimated animated: Bool) {
+		UserDefaults.standard.set(true, forKey: valuesExistKey)
+		UserDefaults.standard.set(mapView.camera.altitude, forKey: altitudeKey)
+		UserDefaults.standard.set(mapView.camera.heading, forKey: headingKey)
+		UserDefaults.standard.set(mapView.camera.centerCoordinate.latitude, forKey: centerLatitudeKey)
+		UserDefaults.standard.set(mapView.camera.centerCoordinate.longitude, forKey: centerLongitudeKey)
+		UserDefaults.standard.synchronize()
 	}
 }
 
