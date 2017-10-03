@@ -6,10 +6,11 @@
 //  Copyright © 2017 Jason Wedepohl. All rights reserved.
 //
 
+import CoreData
 import UIKit
 import MapKit
 
-class MapViewController: UIViewController, MKMapViewDelegate {
+class MapViewController: UIViewController {
 	
 	//MARK: Constants
 	
@@ -23,7 +24,6 @@ class MapViewController: UIViewController, MKMapViewDelegate {
 	
 	var deletePromptView: UITextView!
 	var editingPins = false
-	var pins = [Pin]()
 	
 	//MARK: Outlets
 	
@@ -37,7 +37,10 @@ class MapViewController: UIViewController, MKMapViewDelegate {
 		let longPressRecognizer = UILongPressGestureRecognizer(target: self, action: #selector(addAnnotation(sender:)))
 		view.addGestureRecognizer(longPressRecognizer)
 		
-		setNavBarButton(.edit, #selector(editAnnotations))
+		setEditPinsButton(.edit, #selector(editAnnotations))
+		
+		//load all pins from main context
+		mapView.addAnnotations(Pin.fetchAll())
 	}
 	
 	override func prepare(for segue: UIStoryboardSegue, sender: Any?) {
@@ -66,14 +69,11 @@ class MapViewController: UIViewController, MKMapViewDelegate {
 		let touchLocation = sender.location(in: mapView)
 		let mapLocation = mapView.convert(touchLocation, toCoordinateFrom: mapView)
 		
-		let pin = Pin(mapLocation.latitude, mapLocation.longitude)
-		pins.append(pin)
+		//create Pin in main context
+		let pin = Pin(mapLocation.latitude, mapLocation.longitude, CoreDataStack.instance.context)
+		CoreDataStack.instance.save()
 		
-		let annotation = MKPointAnnotation()
-		annotation.coordinate = mapView.convert(touchLocation, toCoordinateFrom: mapView)
-		annotation.title = pin.id
-		
-		mapView.addAnnotation(annotation)
+		mapView.addAnnotation(pin)
 	}
 	
 	@objc private func editAnnotations() {
@@ -94,7 +94,7 @@ class MapViewController: UIViewController, MKMapViewDelegate {
 			self.view.frame.origin.y -= self.deletePromptHeight
 		}, completion: { finished in
 			self.editingPins = true
-			self.setNavBarButton(.done, #selector(self.doneEditing))
+			self.setEditPinsButton(.done, #selector(self.doneEditing))
 		})
 	}
 	
@@ -106,17 +106,20 @@ class MapViewController: UIViewController, MKMapViewDelegate {
 		}, completion: { finished in
 			self.editingPins = false
 			self.deletePromptView.removeFromSuperview()
-			self.setNavBarButton(.edit, #selector(self.editAnnotations))
+			self.setEditPinsButton(.edit, #selector(self.editAnnotations))
 		})
 	}
 	
-	private func setNavBarButton(_ item: UIBarButtonSystemItem, _ action: Selector) {
+	//used to toggle pin edit mode button between "Edit" and "Done"
+	private func setEditPinsButton(_ item: UIBarButtonSystemItem, _ action: Selector) {
 		navigationItem.rightBarButtonItem = UIBarButtonItem(barButtonSystemItem: item, target: self, action: action)
 	}
+}
+
+//MARK: MKMapViewDelegate
+
+extension MapViewController: MKMapViewDelegate {
 	
-	//MARK: MKMapViewDelegate implementation
-	
-	// Create annotation view
 	func mapView(_ mapView: MKMapView, viewFor annotation: MKAnnotation) -> MKAnnotationView? {
 		var pinView = mapView.dequeueReusableAnnotationView(withIdentifier: pinReuseID) as? MKPinAnnotationView
 		
@@ -124,7 +127,9 @@ class MapViewController: UIViewController, MKMapViewDelegate {
 			pinView = MKPinAnnotationView(annotation: annotation, reuseIdentifier: pinReuseID)
 			pinView!.pinTintColor = .red
 			pinView!.canShowCallout = false
-			pinView!.animatesDrop = true
+			
+			let pin = annotation as! Pin
+			pinView!.animatesDrop = pin.mustAnimatePinDrop
 		}
 		else {
 			pinView!.annotation = annotation
@@ -136,27 +141,17 @@ class MapViewController: UIViewController, MKMapViewDelegate {
 	func mapView(_ mapView: MKMapView, didSelect view: MKAnnotationView) {
 		guard let annotation = view.annotation else { return }
 		
-		let pinIndex = findPin(annotation.title!!)!
-		
 		if editingPins {
 			mapView.removeAnnotation(annotation)
-			pins.remove(at: pinIndex)
+			
+			//remove pin from main context
+			CoreDataStack.instance.context.delete(annotation as! Pin)
+			CoreDataStack.instance.save()
 		} else {
+			//navigate to pin photo collection
 			mapView.deselectAnnotation(annotation, animated: false)
-			performSegue(withIdentifier: gallerySegueIdentifier, sender: pins[pinIndex])
+			performSegue(withIdentifier: gallerySegueIdentifier, sender: annotation as! Pin)
 		}
-	}
-	
-	private func findPin(_ id: String) -> Int? {
-		var index = 0
-		while index < pins.count {
-			let pin = pins[index]
-			if pin.id == id {
-				return index
-			}
-			index += 1
-		}
-		return nil
 	}
 }
 

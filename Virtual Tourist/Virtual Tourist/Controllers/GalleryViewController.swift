@@ -8,6 +8,7 @@
 
 import UIKit
 import MapKit
+import CoreData
 
 class GalleryViewController: UIViewController {
 	//MARK: Constants
@@ -19,8 +20,12 @@ class GalleryViewController: UIViewController {
 	
 	//MARK: Properties
 	
+	let waitingSpinner = WaitingSpinner()
 	var pin: Pin!
-	var photos = [Photo]()
+	var insertedIndexPaths: [IndexPath]!
+	var updatedIndexPaths: [IndexPath]!
+	var deletedIndexPaths: [IndexPath]!
+	var fetchedResultsController: NSFetchedResultsController<NSFetchRequestResult>!
 	
 	//MARK: Outlets
 	
@@ -29,49 +34,61 @@ class GalleryViewController: UIViewController {
 	@IBOutlet var photoCollectionViewFlowLayout: UICollectionViewFlowLayout!
 	@IBOutlet var newCollectionButton: UIButton!
 	@IBOutlet var removeSelectedButton: UIButton!
+	@IBOutlet var noPhotosLabel: UILabel!
 	
 	//MARK: Actions
 	
 	@IBAction func newCollection() {
+		waitingSpinner.show(view)
+		noPhotosLabel.isHidden = true
 		newCollectionButton.isEnabled = false
-		photos = [Photo]()
-		photoCollectionView.reloadData()
 		
-		FlickrClient.instance.getNearbyPhotos(pin) { (successful, photos, displayError) in
-			DispatchQueue.main.async {
-				self.newCollectionButton.isEnabled = true
-				
-				if successful {
-					self.photos = photos!
-					
-					self.photoCollectionView.reloadData()
+		//delete photos for given pin from main context
+		if let photos = fetchedResultsController.fetchedObjects as? [Photo] {
+			for photo in photos {
+				CoreDataStack.instance.context.delete(photo)
+			}
+		}
+		CoreDataStack.instance.save()
+		
+		if pin.flickrPages == Pin.nilValueForInt {
+			//we don't know the number of pages of photos yet
+			FlickrClient.instance.getNearbyPhotos(pin, completionForNewCollection(_:_:))
+		} else {
+			//we know the number of pages, so choose a random one
+			FlickrClient.instance.getRandomPageOfNearbyPhotos(pin, completionForNewCollection(_:_:))
+		}
+	}
+	
+	private func completionForNewCollection(_ successful: Bool, _ displayError: String?) {
+		DispatchQueue.main.async {
+			self.waitingSpinner.hide()
+			self.newCollectionButton.isEnabled = true
+			
+			if successful {
+				if self.pin.flickrTotalCount == 0 {
+					self.noPhotosLabel.isHidden = false
 				} else {
-					ErrorAlert.show(self, displayError)
+					//fetch photos for pin from main context
+					self.performFetch()
+					self.photoCollectionView.reloadData()
 				}
+			} else {
+				ErrorAlert.show(self, displayError)
 			}
 		}
 	}
 	
 	@IBAction func removeSelectedPictures() {
-		photoCollectionView.performBatchUpdates({
-			if let indexPathsToDelete = photoCollectionView.indexPathsForSelectedItems {
-				
-				//remove photos from underlying array
-				var newPhotos = [Photo]()
-				let indicesOfPhotosToDelete = indexPathsToDelete.map { $0.row }
-				
-				for (photoIndex, photo) in photos.enumerated() {
-					if !indicesOfPhotosToDelete.contains(photoIndex) {
-						newPhotos.append(photo)
-					}
-				}
-				
-				photos = newPhotos
-				
-				//remove photo views from collection view
-				photoCollectionView.deleteItems(at: indexPathsToDelete)
+		if let indexPathsToDelete = photoCollectionView.indexPathsForSelectedItems {
+			
+			//delete selected photos from main context, FRC delegate will handle collection view updates
+			for indexPath in indexPathsToDelete {
+				let photo = fetchedResultsController.object(at: indexPath) as! Photo
+				CoreDataStack.instance.context.delete(photo)
 			}
-		})
+			CoreDataStack.instance.save()
+		}
 	}
 	
 	//MARK: UIViewController overrides
@@ -98,14 +115,24 @@ class GalleryViewController: UIViewController {
 		photoCollectionView.dataSource = self
 		photoCollectionView.delegate = self
 		photoCollectionView.allowsMultipleSelection = true
-    }
-	
-	override func viewWillAppear(_ animated: Bool) {
-		super.viewWillAppear(animated)
-		
 		setFlowLayout()
-		newCollection()
-	}
+		
+		//init FRC and tell it to get photos for the given pin from main context
+		let fetchRequest = Photo.getFetchRequest(forPin: pin)
+		
+		fetchedResultsController = NSFetchedResultsController(fetchRequest: fetchRequest,
+		                                                      managedObjectContext: CoreDataStack.instance.context,
+		                                                      sectionNameKeyPath: nil,
+		                                                      cacheName: nil)
+		fetchedResultsController.delegate = self
+		performFetch()
+		
+		if (pin.flickrTotalCount == Pin.nilValueForInt) {
+			newCollection()
+		} else if (pin.flickrTotalCount == 0) {
+			noPhotosLabel.isHidden = false
+		}
+    }
 	
 	override func viewWillTransition(to size: CGSize, with coordinator: UIViewControllerTransitionCoordinator) {
 		super.viewWillTransition(to: size, with: coordinator)
@@ -142,7 +169,7 @@ class GalleryViewController: UIViewController {
 //MARK: MKMapViewDelegate extension
 
 extension GalleryViewController: MKMapViewDelegate {
-	// Create annotation view
+	
 	func mapView(_ mapView: MKMapView, viewFor annotation: MKAnnotation) -> MKAnnotationView? {
 		var pinView = mapView.dequeueReusableAnnotationView(withIdentifier: pinReuseID) as? MKPinAnnotationView
 		
@@ -162,31 +189,36 @@ extension GalleryViewController: MKMapViewDelegate {
 //MARK: UICollectionViewDataSource + UICollectionViewDelegate extension
 
 extension GalleryViewController: UICollectionViewDataSource, UICollectionViewDelegate {
+	func numberOfSections(in collectionView: UICollectionView) -> Int {
+		if let sections = fetchedResultsController.sections {
+			return sections.count
+		}
+		return 0
+	}
+	
 	func collectionView(_ collectionView: UICollectionView, numberOfItemsInSection section: Int) -> Int {
-		return photos.count
+		if let sections = fetchedResultsController.sections {
+			return sections[section].numberOfObjects
+		}
+		return 0
 	}
 	
 	func collectionView(_ collectionView: UICollectionView, cellForItemAt indexPath: IndexPath) -> UICollectionViewCell {
 		let cell = collectionView.dequeueReusableCell(withReuseIdentifier: cellIdentifier, for: indexPath) as! PhotoCollectionViewCell
-		let photo = photos[indexPath.row]
+		let photo = fetchedResultsController.object(at: indexPath) as! Photo
 		
-		cell.loadingIndicator.isHidden = false
-		cell.loadingIndicator.startAnimating()
 		cell.imageView.backgroundColor = UIColor.white
-		cell.imageView.image = nil
+		cell.imageView.contentMode = .scaleAspectFill
 		
-		FlickrClient.instance.downloadImage(photo.url) { (successful, imageData, displayError) in
-			if successful {
-				DispatchQueue.main.async {
-					self.photos[indexPath.row].imageData = imageData!
-					cell.imageView.image = UIImage(data: imageData!)
-					cell.imageView.contentMode = .scaleAspectFill
-					cell.loadingIndicator.stopAnimating()
-					cell.loadingIndicator.isHidden = true
-				}
-			} else {
-				print("Could not download image: \(displayError!)")
-			}
+		if let data = photo.data {
+			cell.imageView.image = UIImage(data: data)
+			cell.loadingIndicator.stopAnimating()
+			cell.loadingIndicator.isHidden = true
+		}
+		else {
+			cell.loadingIndicator.isHidden = false
+			cell.loadingIndicator.startAnimating()
+			cell.imageView.image = nil
 		}
 		
 		return cell
@@ -195,6 +227,7 @@ extension GalleryViewController: UICollectionViewDataSource, UICollectionViewDel
 	func collectionView(_ collectionView: UICollectionView, didSelectItemAt indexPath: IndexPath) {
 		let cell = collectionView.cellForItem(at: indexPath) as! PhotoCollectionViewCell
 		
+		//make image slightly transparent to indicate that it is selected
 		cell.imageView.image = setAlpha(cell.imageView.image!, 0.5)
 		
 		removeSelectedButton.isHidden = false
@@ -203,9 +236,10 @@ extension GalleryViewController: UICollectionViewDataSource, UICollectionViewDel
 	
 	func collectionView(_ collectionView: UICollectionView, didDeselectItemAt indexPath: IndexPath) {
 		let cell = collectionView.cellForItem(at: indexPath) as! PhotoCollectionViewCell
-		let photo = photos[indexPath.row]
+		let photo = fetchedResultsController.object(at: indexPath) as! Photo
 		
-		cell.imageView.image = UIImage(data: photo.imageData!)
+		//make image opaque to indicate that it is deselected
+		cell.imageView.image = UIImage(data: photo.data!)
 		
 		if collectionView.indexPathsForSelectedItems!.count == 0 {
 			removeSelectedButton.isHidden = true
@@ -219,5 +253,50 @@ extension GalleryViewController: UICollectionViewDataSource, UICollectionViewDel
 		let newImage = UIGraphicsGetImageFromCurrentImageContext()
 		UIGraphicsEndImageContext()
 		return newImage!
+	}
+}
+
+//MARK: NSFetchedResultsControllerDelegate implementation
+
+extension GalleryViewController: NSFetchedResultsControllerDelegate {
+	
+	func performFetch() {
+		do {
+			try fetchedResultsController.performFetch()
+		} catch let e as NSError {
+			print("Error while trying to perform a search: \n\(e)\n\(fetchedResultsController)")
+		}
+	}
+	
+	func controllerWillChangeContent(_ controller: NSFetchedResultsController<NSFetchRequestResult>) {
+		insertedIndexPaths = []
+		updatedIndexPaths = []
+		deletedIndexPaths = []
+	}
+	
+	func controller(_ controller: NSFetchedResultsController<NSFetchRequestResult>,
+	                didChange anObject: Any,
+	                at indexPath: IndexPath?,
+	                for type: NSFetchedResultsChangeType,
+	                newIndexPath: IndexPath?) {
+		
+		switch type {
+		case .insert:
+			insertedIndexPaths.append(newIndexPath!)
+		case .delete:
+			deletedIndexPaths.append(indexPath!)
+		case .update:
+			updatedIndexPaths.append(indexPath!)
+		case .move:
+			print("We aren't doing moves so this should never be seen.")
+		}
+	}
+	
+	func controllerDidChangeContent(_ controller: NSFetchedResultsController<NSFetchRequestResult>) {
+		photoCollectionView.performBatchUpdates({
+			self.photoCollectionView.insertItems(at: self.insertedIndexPaths)
+			self.photoCollectionView.deleteItems(at: self.deletedIndexPaths)
+			self.photoCollectionView.reloadItems(at: self.updatedIndexPaths)
+		}, completion: nil)
 	}
 }

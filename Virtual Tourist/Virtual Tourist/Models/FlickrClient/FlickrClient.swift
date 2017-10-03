@@ -25,8 +25,6 @@ class FlickrClient {
 	let searchLatRange = (-90.0, 90.0)
 	let searchLonRange = (-180.0, 180.0)
 	
-	let maxSearchResultPage = 200
-	
 	struct ParameterKeys {
 		static let method = "method"
 		static let apiKey = "api_key"
@@ -46,25 +44,20 @@ class FlickrClient {
 		static let disableJSONCallback = "1"
 		static let mediumURL = "url_m"
 		static let useSafeSearch = "1"
-		static let perPage = "21"
+		static let perPage = "21" //in this app, a collection view of max 3*7 photos needs to be filled
 	}
 	
 	let responseStatusOK = "ok"
 	
+	//Flickr limits results per search to 4000, so need to constrain randomPage upper bound such that randomPage * itemsPerPage < 4000
+	//itemsPerPage is 21 in this app
+	let maxSearchResultPage:Int32 = 4000/21
+	
 	//MARK: Functions
 	
-	func getNearbyPhotos(_ pin: Pin, _ completion: @escaping (_ successful: Bool, _ photos: [Photo]?, _ displayError: String?) -> ()) {
+	func getNearbyPhotos(_ pin: Pin, _ completion: @escaping (_ successful: Bool, _ displayError: String?) -> ()) {
 		
-		let methodParameters = [
-			ParameterKeys.method: ParameterValues.searchMethod,
-			ParameterKeys.apiKey: ParameterValues.apiKey,
-			ParameterKeys.boundingBox: bboxString(pin.latitude, pin.longitude),
-			ParameterKeys.safeSearch: ParameterValues.useSafeSearch,
-			ParameterKeys.extras: ParameterValues.mediumURL,
-			ParameterKeys.format: ParameterValues.responseFormat,
-			ParameterKeys.noJSONCallback: ParameterValues.disableJSONCallback,
-			ParameterKeys.perPage: ParameterValues.perPage
-		]
+		let methodParameters = getSearchRequestParameters(forPin: pin)
 		let request = getRequest(withParameters: methodParameters)
 		
 		let task = URLSession.shared.dataTask(with: request) { (data, response, error) in
@@ -72,29 +65,95 @@ class FlickrClient {
 			let responseHandler = ResponseHandler(data, response, error)
 			
 			if let responseError = responseHandler.getResponseError() {
-				completion(false, nil, responseError)
+				completion(false, responseError)
 				return
 			}
 			
 			guard let parsedResponse:SearchResponse = JSONParser.decode(data!) else {
-				completion(false, nil, DisplayError.unexpected)
+				completion(false, DisplayError.unexpected)
 				return
 			}
 			
 			if parsedResponse.stat != self.responseStatusOK {
-				completion(false, nil, DisplayError.unexpected)
+				completion(false, DisplayError.unexpected)
 				return
 			}
 			
-			let maxPage = min(parsedResponse.photos.pages, self.maxSearchResultPage)
-			let randomPage = Int(arc4random_uniform(UInt32(maxPage))) + 1
-			self.getNearbyPhotos(methodParameters, withPageNumber: randomPage, completion)
+			//set search result stats on pin so they can be reused
+			//pin was loaded in main context, so this change will be persisted to Core Data when app closes (in AppDelegate)
+			pin.flickrPages = Int32(parsedResponse.photos.pages)
+			pin.flickrTotalCount = Int32(parsedResponse.photos.total)!
+			
+			self.getRandomPageOfNearbyPhotos(pin, completion)
 		}
 		
 		task.resume()
 	}
 	
-	func downloadImage(_ urlString: String, _ completion: @escaping (_ successful: Bool, _ data: Data?, _ displayError: String?) -> ()) {
+	func getRandomPageOfNearbyPhotos(_ pin: Pin, _ completion: @escaping (_ successful: Bool, _ displayError: String?) -> ()) {
+		
+		let maxPage = min(pin.flickrPages, maxSearchResultPage)
+		let randomPage = Int(arc4random_uniform(UInt32(maxPage))) + 1
+		
+		var methodParametersWithPageNumber = getSearchRequestParameters(forPin: pin)
+		methodParametersWithPageNumber[ParameterKeys.page] = String(randomPage)
+		
+		var request = getRequest(withParameters: methodParametersWithPageNumber)
+		request.cachePolicy = .reloadIgnoringLocalAndRemoteCacheData
+		
+		let task = URLSession.shared.dataTask(with: request) { (data, response, error) in
+			
+			let responseHandler = ResponseHandler(data, response, error)
+			
+			if let responseError = responseHandler.getResponseError() {
+				completion(false, responseError)
+				return
+			}
+			
+			guard let parsedResponse:SearchResponse = JSONParser.decode(data!) else {
+				completion(false, DisplayError.unexpected)
+				return
+			}
+			
+			if parsedResponse.stat != self.responseStatusOK {
+				completion(false, DisplayError.unexpected)
+				return
+			}
+			
+			var photos = [Photo]()
+			for photoResponse in parsedResponse.photos.photo {
+				
+				//sometimes for some reason url_m is missing from the photo
+				if let url = photoResponse.url_m {
+					
+					//create photo in main context
+					let photo = Photo(url, pin, CoreDataStack.instance.context)
+					photos.append(photo)
+				}
+			}
+			CoreDataStack.instance.save()
+			
+			//handle completion now so UI shows activity indicators for each photo to be downloaded
+			completion(true, nil)
+			
+			//continue to download photos in background, FRC will handle updates
+			for photo in photos {
+				self.downloadPhoto(fromUrl: photo.url!) { (successful, imageData, displayError) in
+					if successful {
+						//set photo data to image data
+						photo.data = imageData
+						CoreDataStack.instance.save()
+					} else {
+						print("Could not download image: \(displayError!)")
+					}
+				}
+			}
+		}
+		
+		task.resume()
+	}
+	
+	private func downloadPhoto(fromUrl urlString: String, _ completion: @escaping (_ successful: Bool, _ data: Data?, _ displayError: String?) -> ()) {
 		let url = URL(string: urlString)
 		
 		let task = URLSession.shared.dataTask(with: url!) { data, response, error in
@@ -111,41 +170,17 @@ class FlickrClient {
 		task.resume()
 	}
 	
-	private func getNearbyPhotos(_ methodParameters: [String: String],
-	                             withPageNumber pageNumber: Int,
-	                             _ completion: @escaping (_ successful: Bool, _ photos: [Photo]?, _ displayError: String?) -> ()) {
-		
-		var methodParametersWithPageNumber = methodParameters
-		methodParametersWithPageNumber[ParameterKeys.page] = String(pageNumber)
-		
-		var request = getRequest(withParameters: methodParametersWithPageNumber)
-		request.cachePolicy = .reloadIgnoringLocalAndRemoteCacheData
-		
-		let task = URLSession.shared.dataTask(with: request) { (data, response, error) in
-			
-			let responseHandler = ResponseHandler(data, response, error)
-			
-			if let responseError = responseHandler.getResponseError() {
-				completion(false, nil, responseError)
-				return
-			}
-			
-			guard let parsedResponse:SearchResponse = JSONParser.decode(data!) else {
-				completion(false, nil, DisplayError.unexpected)
-				return
-			}
-			
-			if parsedResponse.stat != self.responseStatusOK {
-				completion(false, nil, DisplayError.unexpected)
-				return
-			}
-			
-			let photos = parsedResponse.photos.photo.map { Photo($0.url_m) }
-			
-			completion(true, photos, nil)
-		}
-		
-		task.resume()
+	private func getSearchRequestParameters(forPin pin: Pin) -> [String:String] {
+		return [
+			ParameterKeys.method: ParameterValues.searchMethod,
+			ParameterKeys.apiKey: ParameterValues.apiKey,
+			ParameterKeys.boundingBox: bboxString(pin.latitude, pin.longitude),
+			ParameterKeys.safeSearch: ParameterValues.useSafeSearch,
+			ParameterKeys.extras: ParameterValues.mediumURL,
+			ParameterKeys.format: ParameterValues.responseFormat,
+			ParameterKeys.noJSONCallback: ParameterValues.disableJSONCallback,
+			ParameterKeys.perPage: ParameterValues.perPage
+		]
 	}
 	
 	private func getRequest(withParameters parameters: [String:String]) -> URLRequest {
@@ -197,8 +232,8 @@ class FlickrClient {
 		let ispublic: Int
 		let isfriend: Int
 		let isfamily: Int
-		let url_m: String
-		let height_m: String
-		let width_m: String
+		let url_m: String?
+		let height_m: String?
+		let width_m: String?
 	}
 }
