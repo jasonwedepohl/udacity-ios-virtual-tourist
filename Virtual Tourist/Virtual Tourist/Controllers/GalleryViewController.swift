@@ -80,6 +80,8 @@ class GalleryViewController: UIViewController {
 	}
 	
 	@IBAction func removeSelectedPictures() {
+		toggleButtons(deleteMode: false)
+		
 		if let indexPathsToDelete = photoCollectionView.indexPathsForSelectedItems {
 			
 			//delete selected photos from main context, FRC delegate will handle collection view updates
@@ -230,8 +232,7 @@ extension GalleryViewController: UICollectionViewDataSource, UICollectionViewDel
 		//make image slightly transparent to indicate that it is selected
 		cell.imageView.image = setAlpha(cell.imageView.image!, 0.5)
 		
-		removeSelectedButton.isHidden = false
-		newCollectionButton.isHidden = true
+		toggleButtons(deleteMode: true)
 	}
 	
 	func collectionView(_ collectionView: UICollectionView, didDeselectItemAt indexPath: IndexPath) {
@@ -242,9 +243,13 @@ extension GalleryViewController: UICollectionViewDataSource, UICollectionViewDel
 		cell.imageView.image = UIImage(data: photo.data!)
 		
 		if collectionView.indexPathsForSelectedItems!.count == 0 {
-			removeSelectedButton.isHidden = true
-			newCollectionButton.isHidden = false
+			toggleButtons(deleteMode: false)
 		}
+	}
+	
+	func toggleButtons(deleteMode: Bool) {
+		removeSelectedButton.isHidden = !deleteMode
+		newCollectionButton.isHidden = deleteMode
 	}
 	
 	private func setAlpha(_ image: UIImage, _ value:CGFloat) -> UIImage {

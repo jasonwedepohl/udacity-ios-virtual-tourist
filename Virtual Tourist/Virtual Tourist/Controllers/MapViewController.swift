@@ -31,6 +31,7 @@ class MapViewController: UIViewController {
 	
 	var deletePromptView: UITextView!
 	var editingPins = false
+	var currentPin: Pin?
 	
 	//MARK: Outlets
 	
@@ -82,15 +83,23 @@ class MapViewController: UIViewController {
 	}
 	
 	@objc private func addAnnotation(sender: UILongPressGestureRecognizer) {
-		if sender.state != .began { return }
 		let touchLocation = sender.location(in: mapView)
 		let mapLocation = mapView.convert(touchLocation, toCoordinateFrom: mapView)
 		
-		//create Pin in main context
-		let pin = Pin(mapLocation.latitude, mapLocation.longitude, CoreDataStack.instance.context)
-		CoreDataStack.instance.save()
-		
-		mapView.addAnnotation(pin)
+		switch sender.state {
+		case .began:
+			//create Pin in main context
+			currentPin = Pin(mapLocation, CoreDataStack.instance.context)
+			mapView.addAnnotation(currentPin!)
+		case .changed:
+			//update pin location as user drags
+			currentPin!.coordinate = mapLocation
+		case .ended:
+			CoreDataStack.instance.save()
+			currentPin = nil
+		default:
+			print("Unexpected state \(sender.state) occurred.")
+		}
 	}
 	
 	@objc private func editAnnotations() {

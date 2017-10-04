@@ -23,19 +23,26 @@ public class Pin: NSManagedObject, MKAnnotation {
 	
 	//MARK: Properties
 	
-	public var coordinate: CLLocationCoordinate2D { get { return CLLocationCoordinate2DMake(latitude, longitude) } }
+	//must be dynamic for location to be updated on map, see https://stackoverflow.com/questions/34475342/custom-mkannotation-not-moving-when-coordinate-set
+	dynamic public var coordinate: CLLocationCoordinate2D {
+		get {
+			return CLLocationCoordinate2DMake(latitude, longitude)
+		}
+		set {
+			latitude = newValue.latitude
+			longitude = newValue.longitude
+		}
+	}
 	
 	var mustAnimatePinDrop = false
 	
 	//MARK: Init
 	
-	convenience init(_ latitude: Double, _ longitude: Double, _ context: NSManagedObjectContext) {
+	convenience init(_ coordinate: CLLocationCoordinate2D, _ context: NSManagedObjectContext) {
 		if let entityDescription = NSEntityDescription.entity(forEntityName: Pin.entityName, in: context) {
 			self.init(entity: entityDescription, insertInto: context)
-			self.latitude = latitude
-			self.longitude = longitude
+			self.coordinate = coordinate
 			self.id = UUID()
-			
 			self.flickrPages = Pin.nilValueForInt
 			self.flickrTotalCount = Pin.nilValueForInt
 			self.mustAnimatePinDrop = true
